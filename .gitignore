@@ -1,0 +1,15 @@
+# secrets and local config
+.env
+local.settings.json
+*.pem
+*.key
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# misc
+.vscode/
+.DS_Store
