@@ -31,11 +31,11 @@ from .issuer_registry import IssuerRegistry
 from .signing import Signer, b64url_encode, b64url_decode, verify_digest
 from .status_store import CredentialStatus, InMemoryStatusStore, StatusStore
 
-
 class VerificationStatus(str, Enum):
     VALID = "Valid"
     INVALID = "Invalid"
     REVOKED = "Revoked"
+    SUSPENDED = "Suspended"
     EXPIRED = "Expired"
     ISSUER_NOT_TRUSTED = "Issuer Not Trusted"
 
@@ -122,8 +122,12 @@ class CredentialEngine:
         }
 
         # 4) statut initial : actif
-        self.status_store.set_status(credential["id"], CredentialStatus.ACTIVE)
-        return credential
+self.status_store.register_credential(
+    credential=credential,
+    issuer_id=self.issuer_id,
+)
+
+return credential
 
     # ----------------------------------------------------------------- VERIFY
     def verify_credential(self, credential: Dict[str, Any]) -> VerificationResult:
@@ -202,22 +206,32 @@ class CredentialEngine:
         # (e) statut de révocation
         status = self.status_store.get_status(cred_id)
         checks["status"] = status.value
-        if status == CredentialStatus.REVOKED:
-            return VerificationResult(
-                VerificationStatus.REVOKED,
-                "La preuve est mathématiquement valide, mais le credential a été révoqué.",
-                issuer_id=issuer.issuer_id,
-                credential_id=cred_id,
-                checks=checks,
-            )
-        if status == CredentialStatus.SUSPENDED:
-            return VerificationResult(
-                VerificationStatus.REVOKED,
-                "Credential suspendu.",
-                issuer_id=issuer.issuer_id,
-                credential_id=cred_id,
-                checks=checks,
-            )
+       if status == CredentialStatus.UNKNOWN:
+    return VerificationResult(
+        VerificationStatus.INVALID,
+        "Credential is not registered in the trusted database.",
+        issuer_id=issuer.issuer_id,
+        credential_id=cred_id,
+        checks=checks,
+    )
+
+if status == CredentialStatus.REVOKED:
+    return VerificationResult(
+        VerificationStatus.REVOKED,
+        "Credential has been revoked.",
+        issuer_id=issuer.issuer_id,
+        credential_id=cred_id,
+        checks=checks,
+    )
+
+if status == CredentialStatus.SUSPENDED:
+    return VerificationResult(
+        VerificationStatus.SUSPENDED,
+        "Credential is temporarily suspended.",
+        issuer_id=issuer.issuer_id,
+        credential_id=cred_id,
+        checks=checks,
+    )
 
         # (f) tout est bon
         return VerificationResult(
