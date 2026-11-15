@@ -25,6 +25,7 @@ from typing import Optional
 from .models import CredentialSubject
 from .engine import CredentialEngine, VerificationResult, VerificationStatus
 from .signing import LocalECDSASigner, Signer
+from .status_store import SqlLedgerStatusStore, InMemoryStatusStore
 from .issuer_registry import (
     Issuer,
     IssuerRegistry,
@@ -99,11 +100,22 @@ def build_engine_from_env() -> CredentialEngine:
     key_name = os.environ.get("CERTICHAIN_KEY_NAME", "certichain-issuer-key")
     signer: Signer = AzureKeyVaultSigner(vault_url, key_name)
 
-    if sql_conn:
-        registry: IssuerRegistry = SqlIssuerRegistry(sql_conn)
-    else:
-        mem = InMemoryIssuerRegistry()
-        mem.register_from_signer(issuer_id, issuer_name, issuer_identifier, signer)
-        registry = mem
+   if sql_conn:
+    issuer_registry = SqlIssuerRegistry(sql_conn)
+    status_store = SqlLedgerStatusStore(sql_conn)
+else:
+    issuer_registry = InMemoryIssuerRegistry()
+    issuer_registry.register_from_signer(
+        issuer_id=issuer_id,
+        name=issuer_name,
+        identifier=issuer_identifier,
+        signer=signer,
+    )
+    status_store = InMemoryStatusStore()
 
-    return CredentialEngine(signer, registry, issuer_id, InMemoryStatusStore())
+return CredentialEngine(
+    signer=signer,
+    issuer_registry=issuer_registry,
+    issuer_id=issuer_id,
+    status_store=status_store,
+)
