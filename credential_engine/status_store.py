@@ -2,20 +2,20 @@
 from __future__ import annotations
 
 import abc
-from enum import Enum
-from typing import Optional, Dict
 from datetime import datetime, timezone
+from enum import Enum
+from typing import Dict, Optional
 
 
 class CredentialStatus(str, Enum):
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
     REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
     UNKNOWN = "UNKNOWN"
 
 
 class StatusStore(abc.ABC):
-
     @abc.abstractmethod
     def get_status(self, credential_id: str) -> CredentialStatus:
         ...
@@ -69,13 +69,14 @@ class InMemoryStatusStore(StatusStore):
 
 class SqlLedgerStatusStore(StatusStore):
     """
-    Persistent credential lifecycle store using the existing
-    dbo.Credentials and dbo.CredentialEvents tables.
+    SQL-backed credential lifecycle store.
+
+    Uses the existing dbo.Credentials and dbo.CredentialEvents tables.
     """
 
     def __init__(self, connection_string: str):
         try:
-            import pyodbc
+            import pyodbc  # noqa: F401
         except ImportError as exc:
             raise RuntimeError(
                 "pyodbc is required for SQL credential persistence."
@@ -89,12 +90,16 @@ class SqlLedgerStatusStore(StatusStore):
             return None
 
         if isinstance(value, datetime):
-            return value.replace(tzinfo=None)
+            parsed = value
+        else:
+            parsed = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
 
-        parsed = datetime.fromisoformat(
-            value.replace("Z", "+00:00")
-        )
-        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+        return parsed
 
     @staticmethod
     def _db_status(status: CredentialStatus) -> str:
@@ -102,10 +107,13 @@ class SqlLedgerStatusStore(StatusStore):
             CredentialStatus.ACTIVE: "ISSUED",
             CredentialStatus.SUSPENDED: "SUSPENDED",
             CredentialStatus.REVOKED: "REVOKED",
+            CredentialStatus.EXPIRED: "EXPIRED",
         }
 
         if status not in mapping:
-            raise ValueError("UNKNOWN cannot be stored as a credential status.")
+            raise ValueError(
+                "UNKNOWN cannot be stored as a credential status."
+            )
 
         return mapping[status]
 
@@ -116,9 +124,10 @@ class SqlLedgerStatusStore(StatusStore):
             "ACTIVE": CredentialStatus.ACTIVE,
             "SUSPENDED": CredentialStatus.SUSPENDED,
             "REVOKED": CredentialStatus.REVOKED,
-            "EXPIRED": CredentialStatus.UNKNOWN,
+            "EXPIRED": CredentialStatus.EXPIRED,
         }
-        return mapping.get(status, CredentialStatus.UNKNOWN)
+
+        return mapping.get(str(status).upper(), CredentialStatus.UNKNOWN)
 
     def get_status(self, credential_id: str) -> CredentialStatus:
         import pyodbc
@@ -147,12 +156,18 @@ class SqlLedgerStatusStore(StatusStore):
     ) -> None:
         import pyodbc
 
-        subject = credential.get("credentialSubject", {})
+        credential_id = credential.get("id")
+        if not credential_id:
+            raise ValueError("Credential ID is missing.")
+
+        subject = credential.get("credentialSubject") or {}
         credential_types = credential.get("type", [])
 
         if isinstance(credential_types, list):
             credential_type = (
-                credential_types[-1] if credential_types else "AcademicCredential"
+                credential_types[-1]
+                if credential_types
+                else "AcademicCredential"
             )
         else:
             credential_type = str(credential_types)
@@ -170,18 +185,17 @@ class SqlLedgerStatusStore(StatusStore):
             credential.get("expirationDate")
         )
 
-        query = """
-            SELECT issuer_id
-            FROM dbo.Issuers
-            WHERE engine_issuer_id = ?
-              AND status = 'ACTIVE'
-        """
-
         with pyodbc.connect(self._conn_str) as conn:
             cursor = conn.cursor()
 
             issuer_row = cursor.execute(
-                query, issuer_id
+                """
+                SELECT issuer_id
+                FROM dbo.Issuers
+                WHERE engine_issuer_id = ?
+                  AND status = 'ACTIVE'
+                """,
+                issuer_id,
             ).fetchone()
 
             if issuer_row is None:
@@ -190,6 +204,20 @@ class SqlLedgerStatusStore(StatusStore):
                 )
 
             issuer_guid = issuer_row[0]
+
+            existing = cursor.execute(
+                """
+                SELECT credential_id
+                FROM dbo.Credentials
+                WHERE credential_reference = ?
+                """,
+                credential_id,
+            ).fetchone()
+
+            if existing is not None:
+                raise ValueError(
+                    f"Credential '{credential_id}' is already registered."
+                )
 
             cursor.execute(
                 """
@@ -207,7 +235,7 @@ class SqlLedgerStatusStore(StatusStore):
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED')
                 """,
-                credential["id"],
+                credential_id,
                 issuer_guid,
                 subject.get("id", ""),
                 credential_type,
@@ -218,18 +246,19 @@ class SqlLedgerStatusStore(StatusStore):
                 expires_at,
             )
 
-            cursor.execute(
+            credential_row = cursor.execute(
                 """
                 SELECT credential_id
                 FROM dbo.Credentials
                 WHERE credential_reference = ?
                 """,
-                credential["id"],
-            )
-            credential_row = cursor.fetchone()
+                credential_id,
+            ).fetchone()
 
             if credential_row is None:
-                raise RuntimeError("Credential insert could not be confirmed.")
+                raise RuntimeError(
+                    "Credential insert could not be confirmed."
+                )
 
             cursor.execute(
                 """
@@ -242,7 +271,10 @@ class SqlLedgerStatusStore(StatusStore):
                     event_time,
                     details
                 )
-                VALUES (?, 'ISSUED', NULL, 'ISSUED', ?, SYSUTCDATETIME(), ?)
+                VALUES (
+                    ?, 'ISSUED', NULL, 'ISSUED',
+                    ?, SYSUTCDATETIME(), ?
+                )
                 """,
                 credential_row[0],
                 actor_id,
@@ -261,12 +293,6 @@ class SqlLedgerStatusStore(StatusStore):
 
         new_status = self._db_status(status)
 
-        event_types = {
-            "SUSPENDED": "SUSPENDED",
-            "REVOKED": "REVOKED",
-            "ISSUED": "REACTIVATED",
-        }
-
         with pyodbc.connect(self._conn_str) as conn:
             cursor = conn.cursor()
 
@@ -275,7 +301,7 @@ class SqlLedgerStatusStore(StatusStore):
                 SELECT credential_id, status
                 FROM dbo.Credentials
                 WHERE credential_reference = ?
-            """,
+                """,
                 credential_id,
             ).fetchone()
 
@@ -285,15 +311,26 @@ class SqlLedgerStatusStore(StatusStore):
                 )
 
             db_id = row[0]
-            previous_status = row[1]
+            previous_status = str(row[1]).upper()
 
             if previous_status == new_status:
                 return
 
+            if previous_status in ("REVOKED", "EXPIRED"):
+                raise ValueError(
+                    f"Cannot change credential from {previous_status}."
+                )
+
+            if new_status == "ISSUED":
+                event_type = "REACTIVATED"
+            else:
+                event_type = new_status
+
             cursor.execute(
                 """
                 UPDATE dbo.Credentials
-                SET status = ?, updated_at = SYSUTCDATETIME()
+                SET status = ?,
+                    updated_at = SYSUTCDATETIME()
                 WHERE credential_id = ?
                 """,
                 new_status,
@@ -311,10 +348,13 @@ class SqlLedgerStatusStore(StatusStore):
                     event_time,
                     details
                 )
-                VALUES (?, ?, ?, ?, ?, SYSUTCDATETIME(), ?)
+                VALUES (
+                    ?, ?, ?, ?, ?,
+                    SYSUTCDATETIME(), ?
+                )
                 """,
                 db_id,
-                event_types[new_status],
+                event_type,
                 previous_status,
                 new_status,
                 "certichain-system",
