@@ -1,21 +1,3 @@
-"""
-Moteur de credentials CertiChain — Phase 2.
-
-Responsabilités (concept, §7, §11, §12) :
-- issue_credential  : construit un credential structuré, calcule son empreinte
-                      SHA-256, demande la signature (Key Vault ou local) et attache
-                      la preuve.  -> POST /api/credentials
-- verify_credential : vérifie la preuve avec la clé PUBLIQUE de l'émetteur, contrôle
-                      la confiance de l'émetteur, l'expiration et le statut de
-                      révocation, puis renvoie un résultat clair.
-                      -> POST /api/credentials/verify
-- get_issuer_info   : expose les infos publiques d'un émetteur (clé publique,
-                      confiance).  -> GET /api/issuers/{id}
-
-Le moteur ne stocke rien lui-même : il reçoit un Signer, un IssuerRegistry et un
-StatusStore (injection de dépendances). Cela le rend testable sans Azure et
-branchable sur Azure en production.
-"""
 
 from __future__ import annotations
 
@@ -25,11 +7,11 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from . import models
-from .errors import CredentialStructureError
 from .hashing import credential_digest
 from .issuer_registry import IssuerRegistry
 from .signing import Signer, b64url_encode, b64url_decode, verify_digest
-from .status_store import CredentialStatus, InMemoryStatusStore, StatusStore
+from .status_store import CredentialStatus, StatusStore, InMemoryStatusStore
+
 
 class VerificationStatus(str, Enum):
     VALID = "Valid"
@@ -64,13 +46,20 @@ class VerificationResult:
 
 
 def _parse_iso(ts: str) -> Optional[datetime]:
+    if not isinstance(ts, str):
+        return None
+
     try:
-        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
         return None
 
 
 class CredentialEngine:
+
     def __init__(
         self,
         signer: Signer,
@@ -83,7 +72,6 @@ class CredentialEngine:
         self.issuer_id = issuer_id
         self.status_store = status_store or InMemoryStatusStore()
 
-    # ------------------------------------------------------------------ ISSUE
     def issue_credential(
         self,
         subject: models.CredentialSubject,
@@ -93,7 +81,7 @@ class CredentialEngine:
         document_reference: Optional[str] = None,
         document_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Construit et signe un credential. Retourne le VC complet (avec `proof`)."""
+
         credential = models.build_unsigned_credential(
             issuer_id=self.issuer_id,
             subject=subject,
@@ -104,16 +92,15 @@ class CredentialEngine:
             document_hash=document_hash,
         )
 
-        # 1) empreinte SHA-256 de la forme canonique (sans proof)
         digest = credential_digest(credential)
-        # 2) signature de l'empreinte (local ou Key Vault)
         raw_sig = self.signer.sign_digest(digest)
-        # 3) attache la preuve
+
         credential["proof"] = {
             "type": models.PROOF_TYPE,
             "created": models.utcnow_iso(),
             "verificationMethod": models.verification_method(
-                self.issuer_id, self.signer.key_id
+                self.issuer_id,
+                self.signer.key_id,
             ),
             "proofPurpose": models.PROOF_PURPOSE,
             "proofValue": b64url_encode(raw_sig),
@@ -121,137 +108,220 @@ class CredentialEngine:
             "signatureAlg": "ES256",
         }
 
-        # 4) statut initial : actif
-self.status_store.register_credential(
-    credential=credential,
-    issuer_id=self.issuer_id,
-)
+        # Persist credential metadata and its initial event.
+        self.status_store.register_credential(
+            credential=credential,
+            issuer_id=self.issuer_id,
+        )
 
-return credential
+        return credential
 
-    # ----------------------------------------------------------------- VERIFY
-    def verify_credential(self, credential: Dict[str, Any]) -> VerificationResult:
-        """Vérifie un credential et renvoie un résultat clair (concept §7.3, §14)."""
+    def verify_credential(
+        self,
+        credential: Dict[str, Any],
+    ) -> VerificationResult:
+
         checks: Dict[str, Any] = {}
 
-        # (a) structure
-        missing = [f for f in models.REQUIRED_TOP_LEVEL_FIELDS if f not in credential]
-        if missing or "proof" not in credential:
+        if not isinstance(credential, dict):
             return VerificationResult(
                 VerificationStatus.INVALID,
-                f"Structure invalide, champs manquants : {missing or ['proof']}",
+                "Credential must be a JSON object.",
                 checks={"structure": False},
             )
+
+        missing = [
+            field for field in models.REQUIRED_TOP_LEVEL_FIELDS
+            if field not in credential
+        ]
+
+        proof = credential.get("proof")
+
+        if missing or not isinstance(proof, dict):
+            return VerificationResult(
+                VerificationStatus.INVALID,
+                f"Invalid structure. Missing fields: {missing or ['proof']}",
+                checks={"structure": False},
+            )
+
         checks["structure"] = True
 
-        proof = credential["proof"]
+        # Validate proof profile.
+        expected_proof_fields = {
+            "type": models.PROOF_TYPE,
+            "proofPurpose": models.PROOF_PURPOSE,
+            "hashAlg": "SHA-256",
+            "signatureAlg": "ES256",
+        }
+
+        for field_name, expected in expected_proof_fields.items():
+            if proof.get(field_name) != expected:
+                return VerificationResult(
+                    VerificationStatus.INVALID,
+                    f"Unsupported or invalid proof field: {field_name}.",
+                    credential_id=credential.get("id"),
+                    checks={**checks, "proof_metadata": False},
+                )
+
+        checks["proof_metadata"] = True
+
         cred_id = credential.get("id")
         vm = proof.get("verificationMethod", "")
 
-        # (b) confiance de l'émetteur + résolution de la clé publique
+        # Resolve issuer and public key.
         resolved = self.registry.resolve_verification_method(vm)
+
         if resolved is None:
             return VerificationResult(
                 VerificationStatus.ISSUER_NOT_TRUSTED,
-                "Émetteur inconnu ou clé non rattachée à un émetteur reconnu.",
+                "Unknown issuer or unrecognized verification key.",
                 credential_id=cred_id,
                 checks={**checks, "issuer_known": False},
             )
+
         issuer, public_key = resolved
         checks["issuer_known"] = True
+
         if not issuer.is_trusted():
             return VerificationResult(
                 VerificationStatus.ISSUER_NOT_TRUSTED,
-                f"Émetteur « {issuer.name} » suspendu / non autorisé.",
+                "The issuer is suspended or unauthorized.",
                 issuer_id=issuer.issuer_id,
                 credential_id=cred_id,
                 checks={**checks, "issuer_trusted": False},
             )
+
         checks["issuer_trusted"] = True
 
-        # (c) vérification cryptographique de la preuve (clé publique uniquement)
+        # Verify cryptographic proof.
         try:
-            digest = credential_digest(credential)  # recalcule sans `proof`
+            digest = credential_digest(credential)
             raw_sig = b64url_decode(proof.get("proofValue", ""))
-            sig_ok = verify_digest(public_key, digest, raw_sig)
+            signature_ok = verify_digest(public_key, digest, raw_sig)
         except Exception:
-            sig_ok = False
-        checks["signature"] = sig_ok
-        if not sig_ok:
-            # Signature invalide => credential altéré ou mauvaise clé.
+            signature_ok = False
+
+        checks["signature"] = signature_ok
+
+        if not signature_ok:
             return VerificationResult(
                 VerificationStatus.INVALID,
-                "La preuve cryptographique est invalide (credential altéré "
-                "ou signature non conforme).",
+                "Cryptographic signature is invalid.",
                 issuer_id=issuer.issuer_id,
                 credential_id=cred_id,
                 checks=checks,
             )
 
-        # (d) expiration
-        exp = credential.get("expirationDate")
-        if exp:
-            exp_dt = _parse_iso(exp)
-            if exp_dt and exp_dt < datetime.now(timezone.utc):
-                checks["not_expired"] = False
+        # Validate expiration field if present.
+        expiration = credential.get("expirationDate")
+
+        if expiration:
+            expiration_dt = _parse_iso(expiration)
+
+            if expiration_dt is None:
                 return VerificationResult(
-                    VerificationStatus.EXPIRED,
-                    f"Credential expiré le {exp}.",
+                    VerificationStatus.INVALID,
+                    "Invalid expiration date format.",
                     issuer_id=issuer.issuer_id,
                     credential_id=cred_id,
-                    checks=checks,
+                    checks={**checks, "expiration_format": False},
                 )
-            checks["not_expired"] = True
 
-        # (e) statut de révocation
+            if expiration_dt < datetime.now(timezone.utc):
+                return VerificationResult(
+                    VerificationStatus.EXPIRED,
+                    f"Credential expired on {expiration}.",
+                    issuer_id=issuer.issuer_id,
+                    credential_id=cred_id,
+                    checks={**checks, "not_expired": False},
+                )
+
+        checks["not_expired"] = True
+
+        # Retrieve persistent lifecycle status.
         status = self.status_store.get_status(cred_id)
         checks["status"] = status.value
-       if status == CredentialStatus.UNKNOWN:
-    return VerificationResult(
-        VerificationStatus.INVALID,
-        "Credential is not registered in the trusted database.",
-        issuer_id=issuer.issuer_id,
-        credential_id=cred_id,
-        checks=checks,
-    )
 
-if status == CredentialStatus.REVOKED:
-    return VerificationResult(
-        VerificationStatus.REVOKED,
-        "Credential has been revoked.",
-        issuer_id=issuer.issuer_id,
-        credential_id=cred_id,
-        checks=checks,
-    )
+        if status == CredentialStatus.UNKNOWN:
+            return VerificationResult(
+                VerificationStatus.INVALID,
+                "Credential is not registered in the trusted database.",
+                issuer_id=issuer.issuer_id,
+                credential_id=cred_id,
+                checks=checks,
+            )
 
-if status == CredentialStatus.SUSPENDED:
-    return VerificationResult(
-        VerificationStatus.SUSPENDED,
-        "Credential is temporarily suspended.",
-        issuer_id=issuer.issuer_id,
-        credential_id=cred_id,
-        checks=checks,
-    )
+        if status == CredentialStatus.REVOKED:
+            return VerificationResult(
+                VerificationStatus.REVOKED,
+                "Credential has been revoked.",
+                issuer_id=issuer.issuer_id,
+                credential_id=cred_id,
+                checks=checks,
+            )
 
-        # (f) tout est bon
+        if status == CredentialStatus.SUSPENDED:
+            return VerificationResult(
+                VerificationStatus.SUSPENDED,
+                "Credential is temporarily suspended.",
+                issuer_id=issuer.issuer_id,
+                credential_id=cred_id,
+                checks=checks,
+            )
+
+        if status == CredentialStatus.EXPIRED:
+            return VerificationResult(
+                VerificationStatus.EXPIRED,
+                "Credential has expired.",
+                issuer_id=issuer.issuer_id,
+                credential_id=cred_id,
+                checks=checks,
+            )
+
         return VerificationResult(
             VerificationStatus.VALID,
-            "Signature valide, émetteur reconnu, credential actif.",
+            "Signature valid, issuer trusted, credential active.",
             issuer_id=issuer.issuer_id,
             credential_id=cred_id,
             checks=checks,
         )
 
-    # --------------------------------------------------------------- REVOKE
-    def revoke_credential(self, credential_id: str, reason: str) -> None:
-        """
-        Marque un credential comme révoqué (commodité Phase 2).
-        En Phase 3 : contrôle d'autorisation + événement dans le ledger SQL.
-        """
-        self.status_store.set_status(credential_id, CredentialStatus.REVOKED, reason)
+    def revoke_credential(
+        self,
+        credential_id: str,
+        reason: str,
+    ) -> None:
+        self.status_store.set_status(
+            credential_id,
+            CredentialStatus.REVOKED,
+            reason,
+        )
 
-    # ------------------------------------------------------------- ISSUER INFO
-    def get_issuer_info(self, issuer_id: str) -> Optional[Dict[str, Any]]:
-        """Infos publiques d'un émetteur (GET /api/issuers/{id}). Jamais de clé privée."""
+    def suspend_credential(
+        self,
+        credential_id: str,
+        reason: str,
+    ) -> None:
+        self.status_store.set_status(
+            credential_id,
+            CredentialStatus.SUSPENDED,
+            reason,
+        )
+
+    def activate_credential(
+        self,
+        credential_id: str,
+        reason: str,
+    ) -> None:
+        self.status_store.set_status(
+            credential_id,
+            CredentialStatus.ACTIVE,
+            reason,
+        )
+
+    def get_issuer_info(
+        self,
+        issuer_id: str,
+    ) -> Optional[Dict[str, Any]]:
         issuer = self.registry.get_issuer(issuer_id)
         return issuer.public_info() if issuer else None
