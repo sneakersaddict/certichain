@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block body %}
+<h1>Diplômes numériques vérifiables</h1><p class="sub">Émis et signés par l'université, conservés par l'étudiant, vérifiés en quelques secondes par un recruteur.</p>
+<div class="roles">
+<div class="card"><h2>Université</h2><p class="muted">Émettre, archiver, suspendre ou révoquer des diplômes.</p><a class="btn" href="{{ url_for('login') }}">Espace université</a></div>
+<div class="card"><h2>Étudiant</h2><p class="muted">Consulter ses diplômes et les partager par lien ou QR code.</p><a class="btn" href="{{ url_for('login') }}">Mon portefeuille</a></div>
+<div class="card"><h2>Recruteur</h2><p class="muted">Vérifier l'authenticité d'un diplôme, sans compte.</p><a class="btn" href="{{ url_for('verify') }}">Vérifier</a></div>
+</div>{% endblock %}

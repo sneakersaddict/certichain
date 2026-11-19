@@ -1,8 +1,4 @@
-# Dépendances de l'API Azure Functions (Phase 2)
-azure-functions
-cryptography>=42
-# Intégration Azure (production) :
-azure-identity
-azure-keyvault-keys
-# Registre SQL (optionnel, si CERTICHAIN_SQL_CONN est défini) :
-pyodbc
+Flask>=3.0
+requests>=2.31
+segno>=1.6
+gunicorn>=21

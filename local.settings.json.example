@@ -4,14 +4,17 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
 
-    "_comment": "Laisser CERTICHAIN_KEYVAULT_URL vide => mode local (clé logicielle).",
+    "_comment": "Mode local : laisser les variables Azure vides (cle logicielle + registre en memoire). Voir README section 4.",
     "CERTICHAIN_ISSUER_ID": "uir",
     "CERTICHAIN_ISSUER_NAME": "Université Internationale de Rabat",
     "CERTICHAIN_ISSUER_IDENTIFIER": "uir.ac.ma",
 
-    "_azure_production": "Décommenter/renseigner pour brancher Azure Key Vault + SQL :",
     "CERTICHAIN_KEYVAULT_URL": "",
     "CERTICHAIN_KEY_NAME": "certichain-issuer-key",
-    "CERTICHAIN_SQL_CONN": ""
+    "CERTICHAIN_SQL_SERVER": "",
+    "CERTICHAIN_SQL_DATABASE": "",
+    "CERTICHAIN_BLOB_ACCOUNT_URL": "",
+    "CERTICHAIN_PORTAL_URL": "http://localhost:5000",
+    "CERTICHAIN_ALLOW_FAULT_INJECTION": "0"
   }
 }

@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Mon portefeuille{% endblock %}{% block body %}
+<h1>Mon portefeuille</h1><p class="sub">Vos diplômes signés par l'université. Vous choisissez ce que vous partagez, avec qui et pour combien de temps.</p>
+{% if new_share %}<div class="card"><h2>Lien de partage créé</h2><div class="qr"><img src="{{ new_share.qr }}" alt="QR code">
+<div><div class="mono">{{ new_share.url }}</div><p class="muted">Valable jusqu'au {{ new_share.expires_at }} (UTC). Ce lien n'est affiché qu'une fois : copiez-le maintenant.<br>
+Le QR code sert seulement à ouvrir la page de vérification ; l'authenticité est contrôlée par la signature et le registre.</p></div></div></div>{% endif %}
+{% for it in data.credentials %}{% set rec = it.record %}{% set cid = rec.credential_id.split(':')[-1] %}
+<div class="card"><div class="row" style="justify-content:space-between"><div><h2>{{ it.credential.credentialSubject.achievement.name if it.credential else rec.credential_type }}</h2>
+<div class="muted">{{ rec.credential_type }} · émis le {{ rec.issued_at }} · {{ it.credential.credentialSubject.name if it.credential }}</div></div>
+<span class="badge {{ rec.status }}">{{ rec.status }}</span></div>
+<div class="row" style="margin-top:14px"><a class="btn ghost" href="{{ url_for('download', cid=cid) }}">Télécharger (JSON + JWT)</a>
+{% if rec.document_reference %}<a class="btn ghost" href="{{ url_for('document', doc_id=rec.document_reference.split('/')[-1].split('.')[0]) }}">PDF original</a>{% endif %}
+{% if rec.status == 'active' %}<form method="post" action="{{ url_for('create_share', cid=cid) }}" class="row"><input type="hidden" name="csrf" value="{{ csrf_token() }}">
+<select name="hours" style="width:auto"><option value="1">1 heure</option><option value="24" selected>24 heures</option><option value="168">7 jours</option></select><button>Partager (lien + QR)</button></form>{% endif %}</div>
+{% if shares[cid] %}<table style="margin-top:12px"><tr><th>Partage</th><th>Expire</th><th>Consultations</th><th></th></tr>
+{% for s in shares[cid] %}<tr><td class="mono">{{ s.share_id[:8] }}</td><td>{{ s.expires_at }}</td><td>{{ s.access_count }}</td>
+<td>{% if s.revoked %}<span class="badge revoked">retiré</span>{% else %}<form method="post" action="{{ url_for('revoke_share', cid=cid, share_id=s.share_id) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="ghost">Retirer</button></form>{% endif %}</td></tr>{% endfor %}</table>{% endif %}
+</div>{% else %}<div class="card muted">Aucun diplôme pour le moment.</div>{% endfor %}
+{% endblock %}
