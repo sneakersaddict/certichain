@@ -1,15 +1,18 @@
-# secrets and local config
-.env
-local.settings.json
-*.pem
-*.key
-
-# python
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
 .venv/
 venv/
+*.egg-info/
 
-# misc
-.vscode/
+# Secrets / clés — NE JAMAIS COMMITTER
+local.settings.json
+keys/
+*.pem
+*.key
+.env
+
+# OS / IDE
 .DS_Store
+.vscode/

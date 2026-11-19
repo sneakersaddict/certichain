@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Vérifier{% endblock %}{% block body %}
+<h1>Vérifier un diplôme</h1><p class="sub">Collez le credential reçu (JSON ou jeton « vc+jwt »). Aucun compte nécessaire.</p>
+<div class="card"><form method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><textarea name="credential" required placeholder='eyJhbGciOiJFUzI1NiIs...  ou  {"credential": {...}}'></textarea><br><br><button>Vérifier</button></form></div>
+{% if result %}<div class="card"><h2>Résultat</h2>{% with r = result %}{% include "_result.html" %}{% endwith %}</div>{% endif %}
+{% endblock %}

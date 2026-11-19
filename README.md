@@ -129,12 +129,16 @@ CERTICHAIN_KEY_NAME          = certichain-issuer-key
 CERTICHAIN_ISSUER_ID         = uir
 CERTICHAIN_ISSUER_NAME       = Université Internationale de Rabat
 CERTICHAIN_ISSUER_IDENTIFIER = uir.ac.ma
-CERTICHAIN_SQL_CONN          = (optionnel : chaîne ODBC vers Azure SQL)
+CERTICHAIN_SQL_SERVER        = sql-certichain-ct26      (Phase 3 : registre SQL Ledger)
+CERTICHAIN_SQL_DATABASE      = certichain-db
 ```
 
 ### 5.4 Base SQL (métadonnées émetteur/clé)
-Exécuter `sql/issuer_schema.sql` sur `certichain-db`, puis insérer l'émetteur `uir`
-avec sa clé **publique** (récupérée depuis Key Vault). Aucune clé privée en base.
+Les métadonnées émetteur/clé sont dans le registre de la Phase 3 (table Ledger
+`dbo.Issuers` de `certichain-db`, schéma de Rihab). Au démarrage, l'API rattache
+automatiquement la clé **publique** active du Key Vault à l'émetteur `uir`
+(colonnes `public_key_id`, `public_jwk`). Aucune clé privée en base. Connexion par
+identité managée, sans mot de passe (voir `sql/phase3_ledger_schema.sql`).
 
 ### 5.5 Déployer la Function App
 ```bash
@@ -152,6 +156,10 @@ Reprendre les champs du modèle W3C VC **ne rend pas** automatiquement l'implém
 cohérente émission ↔ vérification. C'est volontairement simple et vérifiable pour le
 périmètre du projet ; ce n'est **pas** une suite de preuve W3C certifiée (ex. Data
 Integrity `ecdsa-rdfc-2019`). Évolution possible : adopter une suite normalisée.
+
+Pour que ce soit explicite, chaque preuve déclare son format :
+`"proofFormat": "certichain-es256-canonical-json/v1"`. Le champ est dans `proof`,
+donc hors de l'empreinte signée : il documente le mécanisme sans changer la signature.
 
 ---
 

@@ -1,0 +1,4 @@
+{% set s = r.get('result') or r.get('status') %}
+<div class="result"><span class="badge {{ (s or 'Invalid').split(' ')[0] }} big">{{ s }}</span>
+<div><div>{{ r.reason }}</div>
+<table style="margin-top:8px">{% for k, v in (r.checks or {}).items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table></div></div>
