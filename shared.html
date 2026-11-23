@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Diplôme partagé{% endblock %}{% block body %}
+<h1>Diplôme partagé</h1>
+{% if st != 200 %}<div class="card"><span class="badge Invalid">Lien inutilisable</span><p>{{ d.error }}</p></div>{% else %}
+{% set c = d.credential %}<p class="sub">Partagé par son titulaire · lien valable jusqu'au {{ d.share.expires_at }} (UTC)</p>
+<div class="card"><h2>Résultat de la vérification</h2>{% with r = d.verification %}{% include "_result.html" %}{% endwith %}</div>
+<div class="card"><h2>{{ c.credentialSubject.achievement.name }}</h2><table>
+<tr><th>Titulaire</th><td>{{ c.credentialSubject.name }}</td></tr><tr><th>Type</th><td>{{ c.credentialSubject.achievement.type }}</td></tr>
+<tr><th>Émetteur</th><td class="mono">{{ c.issuer }}</td></tr><tr><th>Émis le</th><td>{{ c.issuanceDate }}</td></tr>
+<tr><th>Identifiant</th><td class="mono">{{ c.id }}</td></tr>
+{% if c.credentialSchema %}<tr><th>Empreinte du PDF</th><td class="mono">{{ c.credentialSchema.documentHash }}</td></tr>{% endif %}</table>
+{% if d.document_url %}<p><a class="btn ghost" href="{{ d.document_url }}" rel="noopener">Voir le PDF original (lien 5 min)</a></p>{% endif %}</div>{% endif %}
+{% endblock %}
