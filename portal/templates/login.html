@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block title %}Connexion{% endblock %}{% block body %}
-<div class="card" style="max-width:440px;margin:auto"><h1>Connexion</h1><p class="sub">Comptes de démonstration (données fictives).</p>
+<div class="card" style="max-width:440px;margin:auto"><h1>Connexion</h1><p class="sub">Comptes de démonstration du projet (données fictives). Le mot de passe de démo est fourni par l'équipe du projet : n'entrez jamais ici un mot de passe personnel.</p>
 <form method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}">
 <label>Compte</label><select name="email">{% for a in accounts %}<option>{{ a }}</option>{% endfor %}</select><br><br>
 <label>Mot de passe</label><input type="password" name="password" required><br><br><button>Se connecter</button></form></div>{% endblock %}

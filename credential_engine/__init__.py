@@ -1,12 +1,21 @@
-
 """
-CertiChain credential engine package.
+CertiChain — Moteur de credentials (Phase 2).
 
-Local mode:
-    Software ECDSA signer + in-memory issuer registry + in-memory status store.
+Expose l'API publique du package et une fabrique `build_engine_from_env()` qui
+construit automatiquement le moteur :
+- en LOCAL (tests/démo)  : signataire logiciel ECDSA P-256 + registre en mémoire ;
+- sur AZURE (production)  : Azure Key Vault (clé non exportable) + registre SQL si
+  configuré, sinon registre en mémoire amorcé avec la clé publique de Key Vault.
 
-Azure mode:
-    Azure Key Vault signer + SQL issuer registry + SQL credential status store.
+Variables d'environnement reconnues :
+    CERTICHAIN_KEYVAULT_URL      ex. https://kv-certichain-ct26.vault.azure.net/
+    CERTICHAIN_KEY_NAME          ex. certichain-issuer-key
+    CERTICHAIN_ISSUER_ID         ex. uir
+    CERTICHAIN_ISSUER_NAME       ex. Université Internationale de Rabat
+    CERTICHAIN_ISSUER_IDENTIFIER ex. uir.ac.ma
+    CERTICHAIN_SQL_SERVER        ex. sql-certichain-ct26 (Phase 3 : registre SQL Ledger)
+    CERTICHAIN_SQL_DATABASE      ex. certichain-db
+    CERTICHAIN_LOCAL_KEY_PATH    chemin de la clé locale (défaut: keys/local_issuer_key.pem)
 """
 
 from __future__ import annotations
@@ -15,23 +24,23 @@ import os
 from typing import Optional
 
 from .models import CredentialSubject
-from .engine import (
-    CredentialEngine,
-    VerificationResult,
-    VerificationStatus,
-)
+from .engine import CredentialEngine, VerificationResult, VerificationStatus
 from .signing import LocalECDSASigner, Signer
-from .status_store import (
-    CredentialStatus,
-    InMemoryStatusStore,
-    SqlLedgerStatusStore,
-    StatusStore,
-)
 from .issuer_registry import (
     Issuer,
     IssuerRegistry,
     InMemoryIssuerRegistry,
     SqlIssuerRegistry,
+)
+from .status_store import CredentialStatus, InMemoryStatusStore, StatusStore
+from .lifecycle import (
+    AuthorizationError,
+    InMemoryTrustLedger,
+    LifecycleError,
+    NotFoundError,
+    TrustLedger,
+    normalize_credential_id,
+    parse_status,
 )
 
 __all__ = [
@@ -47,8 +56,14 @@ __all__ = [
     "SqlIssuerRegistry",
     "CredentialStatus",
     "InMemoryStatusStore",
-    "SqlLedgerStatusStore",
     "StatusStore",
+    "TrustLedger",
+    "InMemoryTrustLedger",
+    "LifecycleError",
+    "AuthorizationError",
+    "NotFoundError",
+    "normalize_credential_id",
+    "parse_status",
     "build_engine_from_env",
     "build_local_engine",
 ]
@@ -64,110 +79,64 @@ def build_local_engine(
     issuer_identifier: str = DEFAULT_ISSUER_IDENTIFIER,
     key_path: Optional[str] = None,
 ) -> CredentialEngine:
-    """Build a local engine without Azure dependencies."""
-
+    """Moteur 100% local (aucune dépendance Azure). Clé persistée si key_path fourni."""
     if key_path and os.path.exists(key_path):
         signer = LocalECDSASigner.from_pem_file(key_path)
     else:
         signer = LocalECDSASigner.generate()
-
         if key_path:
-            directory = os.path.dirname(key_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
+            os.makedirs(os.path.dirname(key_path) or ".", exist_ok=True)
             signer.save_pem_file(key_path)
 
-    registry = InMemoryIssuerRegistry()
-
-    registry.register_from_signer(
-        issuer_id=issuer_id,
-        name=issuer_name,
-        identifier=issuer_identifier,
-        signer=signer,
-    )
-
-    return CredentialEngine(
-        signer=signer,
-        issuer_registry=registry,
-        issuer_id=issuer_id,
-        status_store=InMemoryStatusStore(),
-    )
+    ledger = InMemoryTrustLedger()
+    ledger.register_from_signer(issuer_id, issuer_name, issuer_identifier, signer)
+    # Données de démo locales (fictives) : utilisateurs + types autorisés
+    ledger.add_user("admin@uir.ac.ma", "ADMINISTRATOR")
+    ledger.add_user("scolarite@uir.ac.ma", "UNIVERSITY_STAFF")
+    ledger.add_user("etudiant@uir.ac.ma", "STUDENT")
+    ledger.allow_types(issuer_id, "Bachelor", "Master", "Doctorate", "Certificate")
+    return CredentialEngine(signer, ledger, issuer_id, ledger)
 
 
 def build_engine_from_env() -> CredentialEngine:
-    """Build the engine using the current environment configuration."""
-
-    issuer_id = os.environ.get(
-        "CERTICHAIN_ISSUER_ID",
-        DEFAULT_ISSUER_ID,
-    )
-
-    issuer_name = os.environ.get(
-        "CERTICHAIN_ISSUER_NAME",
-        DEFAULT_ISSUER_NAME,
-    )
-
+    """Construit le moteur selon l'environnement (local vs Azure)."""
+    issuer_id = os.environ.get("CERTICHAIN_ISSUER_ID", DEFAULT_ISSUER_ID)
+    issuer_name = os.environ.get("CERTICHAIN_ISSUER_NAME", DEFAULT_ISSUER_NAME)
     issuer_identifier = os.environ.get(
-        "CERTICHAIN_ISSUER_IDENTIFIER",
-        DEFAULT_ISSUER_IDENTIFIER,
+        "CERTICHAIN_ISSUER_IDENTIFIER", DEFAULT_ISSUER_IDENTIFIER
     )
-
     vault_url = os.environ.get("CERTICHAIN_KEYVAULT_URL")
-    sql_conn = os.environ.get("CERTICHAIN_SQL_CONN")
 
-    # Local mode
     if not vault_url:
         key_path = os.environ.get(
             "CERTICHAIN_LOCAL_KEY_PATH",
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "keys",
-                "local_issuer_key.pem",
-            ),
+            os.path.join(os.path.dirname(__file__), "..", "keys", "local_issuer_key.pem"),
         )
+        return build_local_engine(issuer_id, issuer_name, issuer_identifier, key_path)
 
-        return build_local_engine(
-            issuer_id=issuer_id,
-            issuer_name=issuer_name,
-            issuer_identifier=issuer_identifier,
-            key_path=key_path,
-        )
-
-    # Azure mode: signing key remains in Key Vault.
+    # --- Mode Azure ---
     from .keyvault_signer import AzureKeyVaultSigner
 
-    key_name = os.environ.get(
-        "CERTICHAIN_KEY_NAME",
-        "certichain-issuer-key",
+    key_name = os.environ.get("CERTICHAIN_KEY_NAME", "certichain-issuer-key")
+    signer: Signer = AzureKeyVaultSigner(vault_url, key_name)
+    issuer = Issuer(
+        issuer_id=issuer_id, name=issuer_name, identifier=issuer_identifier,
+        public_key_id=signer.key_id, public_jwk=signer.public_jwk(),
     )
 
-    signer: Signer = AzureKeyVaultSigner(
-        vault_url,
-        key_name,
-    )
+    sql_server = os.environ.get("CERTICHAIN_SQL_SERVER")
+    sql_db = os.environ.get("CERTICHAIN_SQL_DATABASE")
+    if sql_server and sql_db:
+        # Phase 3 : registre de confiance + cycle de vie persistants (Azure SQL Ledger)
+        from .sql_ledger import SqlTrustLedger
 
-    # Azure SQL mode
-    if sql_conn:
-        issuer_registry = SqlIssuerRegistry(sql_conn)
-        status_store = SqlLedgerStatusStore(sql_conn)
-
-    # Azure without SQL: temporary in-memory fallback
+        ledger: TrustLedger = SqlTrustLedger(sql_server, sql_db)
+        ledger.ensure_issuer(issuer)
     else:
-        issuer_registry = InMemoryIssuerRegistry()
+        ledger = InMemoryTrustLedger()
+        ledger.register_issuer(issuer, actor="bootstrap")
+        ledger.add_user("admin@uir.ac.ma", "ADMINISTRATOR")
+        ledger.add_user("scolarite@uir.ac.ma", "UNIVERSITY_STAFF")
+        ledger.allow_types(issuer_id, "Bachelor", "Master", "Doctorate", "Certificate")
 
-        issuer_registry.register_from_signer(
-            issuer_id=issuer_id,
-            name=issuer_name,
-            identifier=issuer_identifier,
-            signer=signer,
-        )
-
-        status_store = InMemoryStatusStore()
-
-    return CredentialEngine(
-        signer=signer,
-        issuer_registry=issuer_registry,
-        issuer_id=issuer_id,
-        status_store=status_store,
-    )
+    return CredentialEngine(signer, ledger, issuer_id, ledger)

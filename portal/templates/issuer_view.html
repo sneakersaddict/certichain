@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% block title %}Diplôme{% endblock %}{% block body %}
+<p><a href="{{ url_for('issuer', holder_email=holder) }}">← Retour aux diplômes de {{ holder }}</a></p>
+<h1>{{ c.credentialSubject.achievement.name if c else rec.credential_type }}</h1>
+<p class="sub">Statut dans le registre : <span class="badge {{ rec.status }}">{{ rec.status }}</span> · émis le {{ rec.issued_at }}</p>
+{% if verification %}<div class="card"><h2>Vérification (signature + registre)</h2>{% with r = verification %}{% include "_result.html" %}{% endwith %}</div>{% endif %}
+<div class="card"><h2>Contenu du diplôme</h2><table>
+{% if c %}<tr><th>Titulaire</th><td>{{ c.credentialSubject.name }}</td></tr>
+<tr><th>Intitulé</th><td>{{ c.credentialSubject.achievement.name }}</td></tr>
+<tr><th>Type</th><td>{{ c.credentialSubject.achievement.type }}</td></tr>
+<tr><th>Émetteur</th><td class="mono">{{ c.issuer }}</td></tr>
+<tr><th>Émis le</th><td>{{ c.issuanceDate }}</td></tr>
+{% if c.expirationDate %}<tr><th>Expire le</th><td>{{ c.expirationDate }}</td></tr>{% endif %}
+<tr><th>Identifiant</th><td class="mono">{{ c.id }}</td></tr>
+<tr><th>Clé de signature</th><td class="mono">{{ c.proof.verificationMethod }}</td></tr>
+{% if c.credentialSchema %}<tr><th>Empreinte SHA-256 du PDF</th><td class="mono">{{ c.credentialSchema.documentHash }}</td></tr>{% endif %}
+{% else %}<tr><td class="muted">Archive du diplôme indisponible.</td></tr>{% endif %}
+<tr><th>PDF dans le stockage</th><td class="mono">{{ rec.document_reference or '—' }}</td></tr></table></div>
+<div class="card"><h2>Image du diplôme (PDF original)</h2>
+{% if pdf_url %}<p class="muted">Aperçu par un lien temporaire en lecture seule (15 minutes). Le stockage reste privé.</p>
+<iframe src="{{ pdf_url }}" title="PDF original du diplôme" style="width:100%;height:720px;border:1px solid #e5e7eb;border-radius:8px"></iframe>
+<p><a class="btn ghost" href="{{ pdf_url }}" target="_blank" rel="noopener noreferrer">Ouvrir le PDF dans un nouvel onglet</a></p>
+{% else %}<p class="muted">Aucun PDF n'a été joint à ce diplôme lors de l'émission.</p>{% endif %}</div>
+{% if c %}<details class="card"><summary><strong>Voir le diplôme signé (JSON)</strong></summary><pre class="mono" style="white-space:pre-wrap;font-size:12px">{{ c | tojson(indent=2) }}</pre></details>{% endif %}
+{% endblock %}

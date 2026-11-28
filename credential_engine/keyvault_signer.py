@@ -47,20 +47,42 @@ class AzureKeyVaultSigner(Signer):
         ).SignatureAlgorithm
 
         cred = credential or DefaultAzureCredential()
-        key_client = KeyClient(vault_url=vault_url, credential=cred)
-        self._kv_key = key_client.get_key(key_name)
+        self._cred = cred
+        self._key_name = key_name
+        self._key_client = KeyClient(vault_url=vault_url, credential=cred)
+        self._load()
 
-        crv = getattr(self._kv_key.key, "crv", None)
+    def _load(self) -> None:
+        """Charge la DERNIÈRE version de la clé (après une rotation, c'est la nouvelle)."""
+        import time
+        from azure.keyvault.keys.crypto import CryptographyClient
+
+        kv_key = self._key_client.get_key(self._key_name)
+        crv = getattr(kv_key.key, "crv", None)
         # Le SDK renvoie un enum (KeyCurveName.p_256) : on compare sa valeur "P-256".
         crv_value = str(getattr(crv, "value", crv) or "")
         if crv_value.replace("_", "-").upper() not in ("P-256", "P256"):
             raise SigningError(
                 f"La clé Key Vault doit être EC P-256 (courbe trouvée : {crv_value})."
             )
-
-        self._crypto = CryptographyClient(self._kv_key, credential=cred)
-        self._key_id = self._kv_key.id  # URL versionnée de la clé
+        self._kv_key = kv_key
+        self._crypto = CryptographyClient(kv_key, credential=self._cred)
+        self._key_id = kv_key.id  # URL versionnée de la clé
         self._public_key = self._build_public_key()
+        self._loaded_at = time.monotonic()
+
+    def refresh(self, force: bool = False, max_age_seconds: int = 60) -> bool:
+        """
+        Rotation de clé (concept §9) : chaque instance relit périodiquement la version
+        courante de la clé dans Key Vault. Retourne True si la version a changé.
+        Évite qu'une instance « ancienne » continue à signer avec une clé retirée.
+        """
+        import time
+        if not force and time.monotonic() - self._loaded_at < max_age_seconds:
+            return False
+        old = self._key_id
+        self._load()
+        return self._key_id != old
 
     def _build_public_key(self) -> EllipticCurvePublicKey:
         k = self._kv_key.key  # JsonWebKey : contient x, y en octets bruts
