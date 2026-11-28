@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% block title %}Université{% endblock %}{% block body %}
-<h1>Tableau de bord — Université</h1><p class="sub">Émetteur : Université Internationale de Rabat (uir). Connecté : {{ session.user }} ({{ session.roles|join(', ') }})</p>
+<h1>Tableau de bord — Université</h1><p class="sub">Émetteur de démonstration : uir (établissement fictif du projet). Connecté : {{ session.user }} ({{ session.roles|join(', ') }})</p>
 <div class="card"><h2>Émettre un diplôme</h2>
 <form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><div class="grid">
-<div><label>E-mail du compte étudiant</label><input name="holder_email" value="etudiant@uir.ac.ma" required></div>
+<div><label>E-mail du compte étudiant</label><input name="holder_email" value="etudiant@uir.ac.ma" required list="students"></div>
 <div><label>Nom complet</label><input name="full_name" required placeholder="Nom de l'étudiant"></div>
 <div><label>Intitulé du diplôme</label><input name="credential_name" required placeholder="Master Cloud Computing"></div>
 <div><label>Type</label><select name="credential_type">{% for t in types %}<option>{{ t }}</option>{% endfor %}</select></div>
@@ -14,13 +14,18 @@
 <tr><th>Clé de signature</th><td class="mono">{{ result.credential.proof.verificationMethod }}</td></tr>
 <tr><th>Archive (Blob WORM)</th><td class="mono">{{ result.archive_reference }}</td></tr>
 <tr><th>PDF associé</th><td class="mono">{{ result.document_reference or '—' }}</td></tr>
-<tr><th>Format standard</th><td class="mono">{{ result.jwt[:110] }}…</td></tr></table></div>{% endif %}
-<div class="card"><h2>Diplômes d'un étudiant</h2><form class="row" method="get"><input name="holder_email" value="{{ lookup or '' }}" placeholder="etudiant@uir.ac.ma" style="max-width:320px"><button class="ghost">Rechercher</button></form>
-{% if wallet %}<table style="margin-top:12px"><tr><th>Diplôme</th><th>Statut</th><th>Émis le</th><th>Action</th></tr>
+<tr><th>Format standard</th><td class="mono">{{ result.jwt[:110] }}…</td></tr></table>
+{% if result_holder %}<p><a class="btn" href="{{ url_for('issuer_view', cid=result.credential.id.split(':')[-1], holder_email=result_holder) }}">Voir le diplôme et son PDF</a></p>{% endif %}</div>{% endif %}
+<datalist id="students"><option value="etudiant@uir.ac.ma"></datalist>
+<div class="card"><h2>Diplômes d'un étudiant</h2><p class="muted">Choisissez un étudiant, puis « Voir » pour afficher le diplôme complet, sa vérification et le PDF original.</p>
+<form class="row" method="get"><input name="holder_email" value="{{ lookup or '' }}" placeholder="etudiant@uir.ac.ma" list="students" style="max-width:320px"><button class="ghost">Rechercher</button></form>
+{% if wallet %}<table style="margin-top:12px"><tr><th>Diplôme</th><th>Statut</th><th>Émis le</th><th>PDF</th><th></th><th>Action</th></tr>
 {% for it in wallet.credentials %}{% set rec = it.record %}<tr><td>{{ it.credential.credentialSubject.achievement.name if it.credential else rec.credential_type }}<div class="mono">{{ rec.credential_id }}</div></td>
 <td><span class="badge {{ rec.status }}">{{ rec.status }}</span></td><td>{{ rec.issued_at }}</td>
+<td>{{ 'Oui' if rec.document_reference else '—' }}</td>
+<td><a class="btn ghost" href="{{ url_for('issuer_view', cid=rec.credential_id.split(':')[-1], holder_email=lookup) }}">Voir</a></td>
 <td><form method="post" action="{{ url_for('change_status') }}" class="row"><input type="hidden" name="csrf" value="{{ csrf_token() }}">
 <input type="hidden" name="credential_id" value="{{ rec.credential_id }}"><input type="hidden" name="holder_email" value="{{ lookup }}">
 <select name="action" style="width:auto"><option value="suspended">Suspendre</option><option value="active">Réactiver</option><option value="revoke">Révoquer</option></select>
-<input name="reason" placeholder="Motif" style="width:150px"><button class="ghost">OK</button></form></td></tr>{% else %}<tr><td colspan="4" class="muted">Aucun diplôme.</td></tr>{% endfor %}</table>{% endif %}</div>
+<input name="reason" placeholder="Motif" style="width:150px"><button class="ghost">OK</button></form></td></tr>{% else %}<tr><td colspan="6" class="muted">Aucun diplôme.</td></tr>{% endfor %}</table>{% endif %}</div>
 {% endblock %}

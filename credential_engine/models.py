@@ -30,6 +30,10 @@ HOLDER_DID_PREFIX = "did:certichain:holder:"
 # Type de preuve (nommage explicite et honnête)
 PROOF_TYPE = "CertiChainEcdsaSecp256r1_ES256"
 PROOF_PURPOSE = "assertionMethod"
+# Format de preuve déclaré explicitement dans chaque credential (concept §9) :
+# signature ES256 sur une canonicalisation JSON déterministe. Aligné W3C, mais ce
+# n'est PAS une suite de preuve W3C normalisée (ex. ecdsa-rdfc-2019).
+PROOF_FORMAT = "certichain-es256-canonical-json/v1"
 STATUS_TYPE = "CertiChainCredentialStatus"
 
 

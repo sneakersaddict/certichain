@@ -1,4 +1,10 @@
-Flask>=3.0
-requests>=2.31
-segno>=1.6
-gunicorn>=21
+# Dépendances de l'API Azure Functions (Phases 2 à 6)
+azure-functions
+cryptography>=42
+# Intégration Azure (production) — identité managée, aucun secret :
+azure-identity
+azure-keyvault-keys
+# Phase 4 : stockage sécurisé des documents (Blob Storage, SAS user delegation)
+azure-storage-blob>=12.19
+# Registre SQL Ledger (Phase 3, si CERTICHAIN_SQL_SERVER est défini) :
+pyodbc

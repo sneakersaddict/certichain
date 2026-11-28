@@ -1,6 +1,6 @@
 """Tests en ligne de la finalisation Parties 2-3 (JWT W3C, droits + SecurityEvents, rotation de clé).
 
-Usage : python test_api_final.py HOST FUNCKEY MASTERKEY ADMIN STAFF STUDENT [avant|apres]
+Usage : python scripts/online_tests_finalisation.py HOST FUNCKEY MASTERKEY ADMIN STAFF STUDENT [avant|apres]
   avant : émet, vérifie (JSON + JWT), teste les refus, sauvegarde le credential dans before.json
   apres : (après rotation de la clé Key Vault) re-vérifie before.json + émet avec la nouvelle clé
 """

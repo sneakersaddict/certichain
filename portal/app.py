@@ -65,10 +65,12 @@ def api(method: str, path: str, *, json_body=None, data=None, headers=None, para
 @app.after_request
 def security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"       # site de démonstration : pas de référencement
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"          # le jeton de partage ne fuit pas
     resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; "
-                                               "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+                                               "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; "
+                                               "frame-src https://*.blob.core.windows.net")   # aperçu du PDF (lien SAS)
     return resp
 
 
@@ -141,6 +143,7 @@ def logout():
 @login_required(*STAFF)
 def issuer():
     result = None
+    result_holder = None
     if request.method == "POST":
         form = request.form
         document_id = None
@@ -164,13 +167,14 @@ def issuer():
         if st == 201:
             flash("Credential émis, signé (Key Vault), archivé (Blob WORM) et enregistré (SQL Ledger).", "ok")
             result = d
+            result_holder = body["subject"]["holder_email"]
         else:
             flash(f"Émission refusée ({st}) : {d.get('error')} — état : {d.get('state', '-')}", "error")
-    lookup = request.args.get("holder_email")
+    lookup = request.args.get("holder_email") or result_holder
     wallet = None
     if lookup:
         _, wallet = api("GET", "wallet", params={"holder_email": lookup}, user=session["user"])
-    return render_template("issuer.html", result=result, wallet=wallet, lookup=lookup,
+    return render_template("issuer.html", result=result, result_holder=result_holder, wallet=wallet, lookup=lookup,
                            types=session.get("allowed_types", []))
 
 
@@ -188,6 +192,33 @@ def change_status():
     flash(f"Statut mis à jour : {d['credential']['status']}" if st == 200
           else f"Refusé ({st}) : {d.get('error')}", "ok" if st == 200 else "error")
     return redirect(url_for("issuer", holder_email=request.form.get("holder_email") or None))
+
+
+@app.route("/issuer/credential/<cid>")
+@login_required(*STAFF)
+def issuer_view(cid):
+    """Université : fiche complète d'un diplôme + vérification + aperçu du PDF original."""
+    holder = request.args.get("holder_email", "").strip()
+    if not holder:
+        flash("Indiquez d'abord le compte de l'étudiant.", "error")
+        return redirect(url_for("issuer"))
+    _, w = api("GET", "wallet", params={"holder_email": holder}, user=session["user"])
+    item = next((it for it in w.get("credentials", [])
+                 if it["record"]["credential_id"].split(":")[-1] == cid.split(":")[-1]), None)
+    if item is None:
+        abort(404)
+    rec, cred = item["record"], item.get("credential")
+    verification = None
+    if cred:
+        _, verification = api("POST", "credentials/verify", json_body={"credential": cred})
+    pdf_url = None
+    if rec.get("document_reference"):
+        doc_id = rec["document_reference"].split("/")[-1].split(".")[0]
+        st, d = api("GET", f"documents/{doc_id}/link", params={"minutes": 15}, user=session["user"])
+        if st == 200:
+            pdf_url = d["url"]      # SAS lecture seule, 15 min max
+    return render_template("issuer_view.html", rec=rec, c=cred, jwt=item.get("jwt"),
+                           verification=verification, pdf_url=pdf_url, holder=holder)
 
 
 # ------------------------------------------------------------------ Étudiant
@@ -271,6 +302,11 @@ def verify():
 def open_share(token):
     st, d = api("POST", "shares/resolve", json_body={"token": token})
     return render_template("shared.html", st=st, d=d), (200 if st == 200 else st)
+
+
+@app.route("/robots.txt")
+def robots():
+    return app.response_class("User-agent: *\nDisallow: /\n", mimetype="text/plain")
 
 
 @app.route("/healthz")
